@@ -1,0 +1,131 @@
+# Public template. Secrets are injected through Portainer Stack environment variables.
+# IMPORTANT: Replace the existing stack IN PLACE only after backups and volume checks.
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    command: [serve]
+    environment:
+      OLLAMA_KEEP_ALIVE: "5m"
+      OLLAMA_NO_CUDA: "1"
+      OLLAMA_HOST: "0.0.0.0:11434"
+    ports:
+      - "31567:11434"
+    volumes:
+      - /media/files/nvm_150/ollama_models:/root/.ollama
+    networks:
+      ollama_network:
+        aliases: [ollama]
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    restart: unless-stopped
+    depends_on: [ollama]
+    environment:
+      OLLAMA_BASE_URL: "http://ollama:11434"
+      OLLAMA_API_URL: "http://ollama:11434"
+      USE_OLLAMA_DOCKER: "false"
+      USE_CUDA_DOCKER: "false"
+      SCARF_NO_ANALYTICS: "true"
+      DO_NOT_TRACK: "true"
+      ANONYMIZED_TELEMETRY: "false"
+    ports:
+      - "3001:8080"
+    volumes:
+      - /media/files/lvm/dockervolumes/open-webui/data:/app/backend/data
+    networks: [ollama_network]
+
+  langflow-db:
+    image: postgres:16-trixie
+    container_name: langflow-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: langflow
+      POSTGRES_DB: langflow
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in Portainer}
+    volumes:
+      - langflow_pgdata:/var/lib/postgresql/data
+    networks: [langflow_private]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langflow -d langflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  langflow:
+    # Build by GitHub Actions. Image package must be public for anonymous Portainer pulls.
+    image: ghcr.io/etcallshome/langflow-research:1.12.1
+    container_name: langflow
+    restart: unless-stopped
+    depends_on:
+      langflow-db:
+        condition: service_healthy
+      research-browser:
+        condition: service_started
+    ports:
+      - "7860:7860"
+    environment:
+      LANGFLOW_HOST: "0.0.0.0"
+      LANGFLOW_PORT: "7860"
+      LANGFLOW_CONFIG_DIR: "/app/langflow"
+      LANGFLOW_WORKFLOW_EXECUTION_TIMEOUT: "1800"
+      LANGFLOW_WORKER_TIMEOUT: "1800"
+      LANGFLOW_AUTO_LOGIN: "false"
+      LANGFLOW_SUPERUSER: "langflow"
+      LANGFLOW_SUPERUSER_PASSWORD: ${LANGFLOW_SUPERUSER_PASSWORD:?Set LANGFLOW_SUPERUSER_PASSWORD in Portainer}
+      LANGFLOW_SECRET_KEY: ${LANGFLOW_SECRET_KEY:?Set LANGFLOW_SECRET_KEY in Portainer}
+      LANGFLOW_ENABLE_SIGNUP: "false"
+      LANGFLOW_NEW_USER_IS_ACTIVE: "false"
+      LANGFLOW_ENABLE_SUPERUSER_CLI: "false"
+      LANGFLOW_DATABASE_URL: ${LANGFLOW_DATABASE_URL:?Set LANGFLOW_DATABASE_URL in Portainer}
+      OLLAMA_BASE_URL: "http://ollama:11434"
+      LANGFLOW_SSRF_PROTECTION_ENABLED: "true"
+      LANGFLOW_CONNECTOR_SSRF_VALIDATION_ENABLED: "true"
+      LANGFLOW_SSRF_ALLOWED_HOSTS: "ollama,192.168.0.11,research-browser"
+      LANGFLOW_NATIVE_TRACING: "true"
+      DO_NOT_TRACK: "true"
+    volumes:
+      - langflow_data:/app/langflow
+      - langflow_runtime:/app/data
+    networks:
+      - ollama_network
+      - langflow_private
+      - research_network
+
+  research-browser:
+    image: ghcr.io/browserless/chromium:latest
+    container_name: research-browser
+    init: true
+    restart: unless-stopped
+    shm_size: "2gb"
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "3000"
+      TOKEN: ${BROWSER_TOKEN:?Set BROWSER_TOKEN in Portainer}
+      CONCURRENT: "2"
+      QUEUED: "10"
+      TIMEOUT: "1800000"
+    # No published ports; available only within research_network.
+    networks: [research_network]
+
+volumes:
+  langflow_pgdata:
+    external: true
+    name: ${LANGFLOW_PG_VOLUME:?Use existing PostgreSQL Docker volume name}
+  langflow_data:
+    external: true
+    name: ${LANGFLOW_CONFIG_VOLUME:?Use existing Langflow configuration Docker volume name}
+  langflow_runtime:
+    external: true
+    name: ${LANGFLOW_RUNTIME_VOLUME:?Create and populate /app/data volume before migration}
+
+networks:
+  ollama_network:
+    name: ollama_network
+  langflow_private:
+    internal: true
+  research_network:
+    internal: false
