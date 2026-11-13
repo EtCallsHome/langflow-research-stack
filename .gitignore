@@ -1,0 +1,15 @@
+# Never commit credentials, local state or exported flows containing secrets
+.env
+.env.*
+!.env.example
+*.sqlite
+*.sqlite3
+*.db
+*.bak
+*.backup
+*.pem
+*.key
+*.p12
+*secret*
+credentials*
+__pycache__/
